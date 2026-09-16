@@ -1,0 +1,19 @@
+# Python virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# macOS
+.DS_Store
+
+# Environment variables / secrets
+.env
+
+# Repositories downloaded by our program
+data/repos/
+
+# IDE
+.vscode/
+.idea/
