@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Codebase Assistant</title>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 16px; color: #202124; }
+  h1 { font-size: 20px; }
+  label { font-size: 14px; }
+  input, textarea, button { font-size: 14px; font-family: inherit; }
+  input#repo { padding: 4px 8px; }
+  textarea#question { width: 100%; height: 70px; margin-top: 8px; box-sizing: border-box; padding: 8px; }
+  .row { margin-bottom: 12px; }
+  button { padding: 6px 16px; cursor: pointer; }
+  button:disabled { cursor: default; opacity: 0.6; }
+  #status { color: #666; font-size: 13px; margin-left: 10px; }
+  #answer { white-space: pre-wrap; line-height: 1.55; border: 1px solid #ddd; padding: 16px; border-radius: 6px; margin-top: 16px; }
+  #answer.abstained { border-color: #d93025; background: #fdecea; }
+  .citation { background: #e8f0fe; border-bottom: 1px dotted #4285f4; cursor: pointer; padding: 0 2px; border-radius: 3px; text-decoration: none; color: inherit; }
+  .citation.unverified { background: #fdecea; border-bottom: 1px dotted #d93025; }
+  #citations-list { margin-top: 14px; font-size: 13px; padding-left: 18px; }
+  #citations-list li { margin-bottom: 4px; }
+  .badge-ok { color: #188038; }
+  .badge-bad { color: #d93025; }
+  #history { margin-top: 24px; font-size: 13px; color: #666; }
+</style>
+</head>
+<body>
+  <h1>Codebase Assistant</h1>
+
+  <div class="row">
+    <label>Repo: <input id="repo" value="requests"></label>
+  </div>
+  <div class="row">
+    <textarea id="question" placeholder="Ask a question about the repo..."></textarea>
+  </div>
+  <div class="row">
+    <button id="ask">Ask</button><span id="status"></span>
+  </div>
+
+  <div id="answer" hidden></div>
+  <ul id="citations-list"></ul>
+  <div id="history"></div>
+
+<script>
+// Real repo URLs, from docs/DECISIONS.md's Day 0 eval-repo selection --
+// used only to link citations back to the actual source on GitHub.
+const REPO_GITHUB = {
+  "requests": "psf/requests",
+  "fitness-tracker": "Harshagg-code/fitness-tracker",
+};
+
+const CITATION_RE = /([^\s`(),\[\]]+):(\d+)-(\d+)/g;
+
+const askBtn = document.getElementById("ask");
+const answerEl = document.getElementById("answer");
+const statusEl = document.getElementById("status");
+const citationsList = document.getElementById("citations-list");
+const historyEl = document.getElementById("history");
+let history = [];
+
+function citationUrl(repo, path, start, end) {
+  const slug = REPO_GITHUB[repo];
+  if (!slug) return null;
+  return `https://github.com/${slug}/blob/main/${path}#L${start}-L${end}`;
+}
+
+function escapeHtml(text) {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function renderAnswer(repo, text, citations, grounded) {
+  const verified = new Set(
+    citations.filter((c) => c.verified).map((c) => `${c.path}:${c.start_line}-${c.end_line}`)
+  );
+
+  const html = escapeHtml(text).replace(CITATION_RE, (match, path, start, end) => {
+    const key = `${path}:${start}-${end}`;
+    const ok = verified.has(key);
+    const url = citationUrl(repo, path, start, end);
+    const cls = ok ? "citation" : "citation unverified";
+    const title = ok ? "verified citation -- click to view source" : "citation could not be verified against retrieved evidence";
+    if (url) {
+      return `<a class="${cls}" href="${url}" target="_blank" rel="noopener" title="${title}">${match}</a>`;
+    }
+    return `<span class="${cls}" title="${title}">${match}</span>`;
+  });
+
+  answerEl.innerHTML = html;
+  answerEl.hidden = false;
+  answerEl.classList.toggle("abstained", !grounded);
+}
+
+function renderCitationsList(repo, citations) {
+  citationsList.innerHTML = "";
+  for (const c of citations) {
+    const li = document.createElement("li");
+    const url = citationUrl(repo, c.path, c.start_line, c.end_line);
+    const label = `${c.path}:${c.start_line}-${c.end_line}`;
+    const badge = `<span class="${c.verified ? "badge-ok" : "badge-bad"}">${c.verified ? "✓" : "✗"}</span>`;
+    li.innerHTML = url
+      ? `${badge} <a href="${url}" target="_blank" rel="noopener">${label}</a>`
+      : `${badge} ${label}`;
+    citationsList.appendChild(li);
+  }
+}
+
+askBtn.addEventListener("click", async () => {
+  const repo = document.getElementById("repo").value.trim();
+  const question = document.getElementById("question").value.trim();
+  if (!repo || !question) return;
+
+  statusEl.textContent = "thinking...";
+  askBtn.disabled = true;
+  try {
+    const res = await fetch("/ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ repo, question, history }),
+    });
+    if (!res.ok) {
+      statusEl.textContent = `error: ${res.status}`;
+      return;
+    }
+    const data = await res.json();
+
+    renderAnswer(repo, data.answer, data.citations, data.grounded);
+    renderCitationsList(repo, data.citations);
+
+    if (!data.grounded) {
+      statusEl.textContent = "abstained -- low retrieval confidence";
+    } else if (data.rewritten_question) {
+      statusEl.textContent = `rewritten query: "${data.rewritten_question}"`;
+    } else {
+      statusEl.textContent = "";
+    }
+
+    history.push({ question, answer: data.answer });
+    const entry = document.createElement("div");
+    entry.textContent = `${history.length}. ${question}`;
+    historyEl.prepend(entry);
+    document.getElementById("question").value = "";
+  } catch (err) {
+    statusEl.textContent = "error: " + err;
+  } finally {
+    askBtn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>

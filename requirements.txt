@@ -1,0 +1,11 @@
+tree-sitter
+tree-sitter-language-pack
+rank-bm25
+sentence-transformers
+qdrant-client
+fastapi
+uvicorn
+pydantic
+python-dotenv
+gitpython
+openai

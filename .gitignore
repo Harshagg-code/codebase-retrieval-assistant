@@ -11,9 +11,12 @@ __pycache__/
 # Environment variables / secrets
 .env
 
-# Repositories downloaded by our program
-data/repos/
+# Cloned repos, vector store, and other generated data
+data/
 
 # IDE
 .vscode/
 .idea/
+
+# Manual backup archive, not part of version control
+Archive.zip
